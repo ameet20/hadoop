@@ -18,19 +18,28 @@
 # Dockerfile for installing the necessary dependencies for building Hadoop.
 # See BUILDING.txt.
 
-
-FROM ubuntu:trusty
+FROM ubuntu:xenial
 
 WORKDIR /root
+
+#####
+# Disable suggests/recommends
+#####
+RUN echo APT::Install-Recommends "0"\; > /etc/apt/apt.conf.d/10disableextras
+RUN echo APT::Install-Suggests "0"\; >>  /etc/apt/apt.conf.d/10disableextras
 
 ENV DEBIAN_FRONTEND noninteractive
 ENV DEBCONF_TERSE true
 
 ######
-# Install common dependencies from packages
+# Install common dependencies from packages. Versions here are either
+# sufficient or irrelevant.
+#
+# WARNING: DO NOT PUT JAVA APPS HERE! Otherwise they will install default
+# Ubuntu Java.  See Java section below!
 ######
-RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
-    ant \
+RUN apt-get -q update && apt-get -q install -y \
+    apt-utils \
     build-essential \
     bzip2 \
     cmake \
@@ -41,8 +50,6 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     gcc \
     git \
     gnupg-agent \
-    make \
-    maven \
     libbz2-dev \
     libcurl4-openssl-dev \
     libfuse-dev \
@@ -52,86 +59,107 @@ RUN apt-get -q update && apt-get -q install --no-install-recommends -y \
     libsnappy-dev \
     libssl-dev \
     libtool \
+    locales \
+    make \
     pinentry-curses \
     pkg-config \
-    protobuf-compiler \
-    protobuf-c-compiler \
     python \
     python2.7 \
-    python2.7-dev \
     python-pip \
+    python-pkg-resources \
+    python-setuptools \
+    python-wheel \
     rsync \
+    software-properties-common \
     snappy \
+    sudo \
     zlib1g-dev
 
-######
-# Install Apache Maven
-######
-RUN mkdir -p /opt/maven && \
-    curl -L -s -S \
-         http://www-us.apache.org/dist/maven/maven-3/3.3.9/binaries/apache-maven-3.3.9-bin.tar.gz \
-         -o /opt/maven.tar.gz && \
-    tar xzf /opt/maven.tar.gz --strip-components 1 -C /opt/maven
-ENV MAVEN_HOME /opt/maven
-
+#######
+# OpenJDK 8
+#######
+RUN apt-get -q install -y openjdk-8-jdk
 
 #######
-# Java OpenJDK
+# OpenJDK 9
+# w/workaround for
+# https://bugs.launchpad.net/ubuntu/+source/openjdk-9/+bug/1593191
 #######
+RUN apt-get -o Dpkg::Options::="--force-overwrite" \
+    -q install -y \
+    openjdk-9-jdk-headless
 
-RUN echo "dot_style = mega" > "/root/.wgetrc"
-RUN echo "quiet = on" >> "/root/.wgetrc"
-
-RUN apt-get -q install --no-install-recommends -y software-properties-common
-# RUN add-apt-repository -y ppa:webupd8team/java
-RUN apt-get -q update
-
-# Install OpenJDK 7
-#RUN apt-get -q install --no-install-recommends -y openjdk-7-jdk
-#RUN apt-get -q install -y openjdk-8-jdk
-RUN apt-get -q update \
-    && apt-get -q install -y --no-install-recommends openjdk-8-jdk libbcprov-java \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+#######
+# Set default Java
+#######
+#
+# By default, OpenJDK sets the default Java to the highest version.
+# We want the opposite, soooooo....
+#
+RUN update-java-alternatives --set java-1.8.0-openjdk-amd64
+RUN update-alternatives --get-selections | grep -i jdk | \
+    while read line; do \
+      alternative=$(echo $line | awk '{print $1}'); \
+      path=$(echo $line | awk '{print $3}'); \
+      newpath=$(echo $path | sed -e 's/java-9/java-8/'); \
+      update-alternatives --set $alternative $newpath; \
+    done
 
 ######
-# Install spotbugs (successor of findbugs)
+# Install cmake 3.1.0 (3.5.1 ships with Xenial)
 ######
-RUN mkdir -p /opt/spotbugs && \
+RUN mkdir -p /opt/cmake && \
     curl -L -s -S \
-         http://repo.maven.apache.org/maven2/com/github/spotbugs/spotbugs/3.1.2/spotbugs-3.1.2.tgz \
-         -o /opt/spotbugs.tar.gz && \
-    tar xzf /opt/spotbugs.tar.gz --strip-components 1 -C /opt/spotbugs
-# Hadoop uses FINDBUGS_HOME to run spotbugs
-ENV FINDBUGS_HOME /opt/spotbugs
+      https://cmake.org/files/v3.1/cmake-3.1.0-Linux-x86_64.tar.gz \
+      -o /opt/cmake.tar.gz && \
+    tar xzf /opt/cmake.tar.gz --strip-components 1 -C /opt/cmake
+ENV CMAKE_HOME /opt/cmake
+ENV PATH "${PATH}:/opt/cmake/bin"
+
+######
+# Install Google Protobuf 2.5.0 (2.6.0 ships with Xenial)
+######
+RUN mkdir -p /opt/protobuf-src && \
+    curl -L -s -S \
+      https://github.com/google/protobuf/releases/download/v2.5.0/protobuf-2.5.0.tar.gz \
+      -o /opt/protobuf.tar.gz && \
+    tar xzf /opt/protobuf.tar.gz --strip-components 1 -C /opt/protobuf-src
+RUN cd /opt/protobuf-src && ./configure --prefix=/opt/protobuf && make install
+ENV PROTOBUF_HOME /opt/protobuf
+ENV PATH "${PATH}:/opt/protobuf/bin"
+
+######
+# Install Apache Maven 3.3.9 (3.3.9 ships with Xenial)
+######
+RUN apt-get -q update && apt-get -q install -y maven
+ENV MAVEN_HOME /usr
+
+######
+# Install findbugs 3.0.1 (3.0.1 ships with Xenial)
+######
+RUN apt-get -q update && apt-get -q install -y findbugs
+ENV FINDBUGS_HOME /usr
 
 ####
-# Install shellcheck
+# Install shellcheck (0.4.6, the latest as of 2017-09-26)
 ####
-RUN apt-get -q install -y cabal-install
-RUN mkdir /root/.cabal
-RUN echo "remote-repo: hackage.fpcomplete.com:http://hackage.fpcomplete.com/" >> /root/.cabal/config
-#RUN echo "remote-repo: hackage.haskell.org:http://hackage.haskell.org/" > /root/.cabal/config
-RUN echo "remote-repo-cache: /root/.cabal/packages" >> /root/.cabal/config
-RUN cabal update
-RUN cabal install shellcheck --global
+RUN add-apt-repository -y ppa:jonathonf/ghc-8.0.2
+RUN apt-get -q update && apt-get -q install -y shellcheck
 
 ####
-# Install bats
+# Install bats (0.4.0, the latest as of 2017-09-26, ships with Xenial)
 ####
-RUN add-apt-repository -y ppa:duggan/bats
-RUN apt-get -q update
-RUN apt-get -q install --no-install-recommends -y bats
+RUN apt-get -q update && apt-get -q install -y bats
 
 ####
-# Install pylint
+# Install pylint (always want latest)
 ####
-RUN pip install pylint==1.9.2
+RUN pip2 install pylint
 
 ####
 # Install dateutil.parser
 ####
-RUN pip install python-dateutil
+RUN pip2 install python-dateutil
 
 ###
 # Avoid out of memory errors in builds
@@ -139,7 +167,7 @@ RUN pip install python-dateutil
 ENV MAVEN_OPTS -Xms256m -Xmx1536m
 
 ###
-# Install node js tools for web UI frameowkr
+# Install node.js for web UI framework (4.2.6 ships with Xenial)
 ###
 RUN apt-get -q update \
     && apt-get install -y --no-install-recommends nodejs npm \
@@ -151,18 +179,29 @@ RUN apt-get -q update \
     && npm install -g jshint
 
 ###
+# Avoid out of memory errors in builds
+###
+ENV MAVEN_OPTS -Xms256m -Xmx1g
+
+
+###
 # Everything past this point is either not needed for testing or breaks Yetus.
 # So tell Yetus not to read the rest of the file:
 # YETUS CUT HERE
 ###
 
 ####
-# Install Forrest (for Apache Hadoop website)
+# Install svn, Ant, & Forrest (for Apache Hadoop website)
 ###
-RUN mkdir -p /usr/local/apache-forrest ; \
-    curl -s -S -O http://archive.apache.org/dist/forrest/0.8/apache-forrest-0.8.tar.gz ; \
-    tar xzf *forrest* --strip-components 1 -C /usr/local/apache-forrest ; \
-    echo 'forrest.home=/usr/local/apache-forrest' > build.properties
+RUN apt-get -q update && apt-get -q install -y ant subversion
+
+RUN mkdir -p /opt/apache-forrest && \
+    curl -L -s -S \
+      https://archive.apache.org/dist/forrest/0.8/apache-forrest-0.8.tar.gz \
+      -o /opt/forrest.tar.gz && \
+    tar xzf /opt/forrest.tar.gz --strip-components 1 -C /opt/apache-forrest
+RUN echo 'forrest.home=/opt/apache-forrest' > build.properties
+ENV FORREST_HOME=/opt/apache-forrest
 
 # Add a welcome message and environment checks.
 ADD hadoop_env_checks.sh /root/hadoop_env_checks.sh
