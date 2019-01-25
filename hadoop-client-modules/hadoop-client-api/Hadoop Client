@@ -1,0 +1,8 @@
+Configuration conf = new Configuration();
+conf.set("fs.defaultFS","hdfs://one.hdp:8020");
+FileSystem fs = FileSystem.get(conf);
+
+FileStatus[] fsStatus = fs.listStatus(new Path("/"));
+for(int i = 0; i < fsStatus.length; i++){
+   System.out.println(fsStatus[i].getPath().toString());
+}
